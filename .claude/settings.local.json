@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install)",
+      "Bash(npm run build:*)",
+      "Bash(node -e:*)",
+      "Bash(npm run prod:*)",
+      "Bash(where:*)",
+      "WebSearch",
+      "Bash(npm ls:*)",
+      "Bash(npm install:*)",
+      "Bash(npm view:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(dir:*)",
+      "Bash(node --version:*)",
+      "Bash(\"node_modules\\\\@distube\\\\yt-dlp\\\\bin\\\\yt-dlp.exe\" --version)",
+      "Bash(\"node_modules\\\\@distube\\\\yt-dlp\\\\bin\\\\yt-dlp.exe\" --dump-json \"ytsearch1:i want it that way backstreet boys\")",
+      "Bash(deno --version:*)",
+      "Bash(\"node_modules\\\\@distube\\\\yt-dlp\\\\bin\\\\yt-dlp.exe\" --dump-json --no-warnings \"ytsearch1:i want it that way backstreet boys\")",
+      "Bash(timeout 30 npx ts-node:*)",
+      "Bash(timeout 120 npm start:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(npm show:*)",
+      "WebFetch(domain:genius-lyrics.js.org)"
+    ]
+  }
+}

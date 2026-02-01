@@ -1,12 +1,5 @@
-import {
-  ActionRowBuilder,
-  ChatInputCommandInteraction,
-  SlashCommandBuilder,
-  StringSelectMenuBuilder,
-  StringSelectMenuInteraction
-} from "discord.js";
-import youtube, { Video } from "youtube-sr";
-import { bot } from "..";
+import { ChatInputCommandInteraction, GuildMember, SlashCommandBuilder } from "discord.js";
+import { lavalink, lavalinkHandler } from "../index";
 import { i18n } from "../utils/i18n";
 
 export default {
@@ -18,69 +11,51 @@ export default {
     ),
   async execute(interaction: ChatInputCommandInteraction) {
     const query = interaction.options.getString("query", true);
-    const member = interaction.guild!.members.cache.get(interaction.user.id);
+    const member = interaction.member as GuildMember;
 
-    if (!member?.voice.channel)
+    if (!member?.voice.channel) {
       return interaction.reply({ content: i18n.__("search.errorNotChannel"), ephemeral: true }).catch(console.error);
+    }
 
-    const search = query;
-
-    await interaction.reply("⏳ Loading...").catch(console.error);
-
-    let results: Video[] = [];
+    await interaction.reply("⏳ Searching and playing...").catch(console.error);
 
     try {
-      results = await youtube.search(search, { limit: 10, type: "video" });
+      let player = lavalink.getPlayer(interaction.guildId!);
+
+      // Create player if it doesn't exist
+      if (!player) {
+        player = await lavalinkHandler.createPlayer({
+          guildId: interaction.guildId!,
+          voiceChannelId: member.voice.channel.id,
+          textChannelId: interaction.channelId
+        });
+      }
+
+      // Connect if not connected
+      if (!player.connected) {
+        await player.connect();
+      }
+
+      // Search with YouTube
+      const result = await player.search(query, interaction.user);
+
+      if (!result.tracks.length) {
+        return interaction.editReply({ content: i18n.__("search.noResults") }).catch(console.error);
+      }
+
+      // Add first result to queue
+      const track = result.tracks[0];
+      await player.queue.add(track);
+
+      // Start playing if not already
+      if (!player.playing && !player.paused) {
+        await player.play();
+      }
+
+      await interaction.deleteReply().catch(() => {});
     } catch (error) {
-      console.error(error);
-      interaction.editReply({ content: i18n.__("common.errorCommand") }).catch(console.error);
-      return;
+      console.error("Search error:", error);
+      interaction.editReply({ content: i18n.__("search.noResults") }).catch(console.error);
     }
-
-    if (!results || !results[0]) {
-      interaction.editReply({ content: i18n.__("search.noResults") });
-      return;
-    }
-
-    const options = results!.map((video) => {
-      return {
-        label: video.title ?? "",
-        value: video.url
-      };
-    });
-
-    const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId("search-select")
-        .setPlaceholder("Nothing selected")
-        .setMinValues(1)
-        .setMaxValues(10)
-        .addOptions(options)
-    );
-
-    const followUp = await interaction.followUp({
-      content: "Choose songs to play",
-      components: [row]
-    });
-
-    followUp
-      .awaitMessageComponent({
-        time: 30000
-      })
-      .then((selectInteraction) => {
-        if (!(selectInteraction instanceof StringSelectMenuInteraction)) return;
-
-        selectInteraction.update({ content: "⏳ Loading the selected songs...", components: [] });
-
-        bot.slashCommandsMap
-          .get("play")!
-          .execute(interaction, selectInteraction.values[0])
-          .then(() => {
-            selectInteraction.values.slice(1).forEach((url) => {
-              bot.slashCommandsMap.get("play")!.execute(interaction, url);
-            });
-          });
-      })
-      .catch(console.error);
   }
 };

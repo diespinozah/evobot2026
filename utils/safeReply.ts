@@ -1,13 +1,26 @@
-import { ButtonInteraction, CommandInteraction } from "discord.js";
+import { ButtonInteraction, CommandInteraction, TextChannel } from "discord.js";
 
 export async function safeReply(interaction: CommandInteraction | ButtonInteraction, content: string) {
   try {
-    if (interaction.deferred || interaction.replied) {
-      await interaction.followUp(content);
+    if (interaction.replied) {
+      // Already replied, use followUp
+      await interaction.followUp({ content, ephemeral: false }).catch(() => {});
+    } else if (interaction.deferred) {
+      // Deferred but not replied, use editReply
+      await interaction.editReply({ content }).catch(() => {});
     } else {
-      await interaction.reply(content);
+      // Not deferred or replied, use reply
+      await interaction.reply({ content }).catch(() => {});
     }
   } catch (error) {
-    console.error(error);
+    // If all else fails, try to send to channel
+    try {
+      const channel = interaction.channel as TextChannel;
+      if (channel) {
+        await channel.send(content).catch(() => {});
+      }
+    } catch {
+      // Silently fail
+    }
   }
 }

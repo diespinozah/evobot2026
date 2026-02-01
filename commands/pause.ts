@@ -1,24 +1,25 @@
 import { ChatInputCommandInteraction, SlashCommandBuilder } from "discord.js";
-import { bot } from "../index";
+import { lavalink } from "../index";
 import { i18n } from "../utils/i18n";
 import { canModifyQueue } from "../utils/queue";
 import { safeReply } from "../utils/safeReply";
 
 export default {
   data: new SlashCommandBuilder().setName("pause").setDescription(i18n.__("pause.description")),
-  execute(interaction: ChatInputCommandInteraction) {
-    const guildMemer = interaction.guild!.members.cache.get(interaction.user.id);
-    const queue = bot.queues.get(interaction.guild!.id);
+  async execute(interaction: ChatInputCommandInteraction) {
+    const guildMember = interaction.guild!.members.cache.get(interaction.user.id);
+    const player = lavalink.getPlayer(interaction.guildId!);
 
-    if (!queue) return interaction.reply({ content: i18n.__("pause.errorNotQueue") }).catch(console.error);
+    if (!player || !player.queue.current) {
+      return interaction.reply({ content: i18n.__("pause.errorNotQueue") }).catch(console.error);
+    }
 
-    if (!canModifyQueue(guildMemer!)) return i18n.__("common.errorNotChannel");
+    if (!canModifyQueue(guildMember!)) return i18n.__("common.errorNotChannel");
 
-    if (queue.player.pause()) {
+    if (!player.paused) {
+      await player.pause();
       const content = i18n.__mf("pause.result", { author: interaction.user.id });
-
       safeReply(interaction, content);
-
       return true;
     }
   }

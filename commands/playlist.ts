@@ -1,15 +1,10 @@
-import { DiscordGatewayAdapterCreator, joinVoiceChannel } from "@discordjs/voice";
 import {
   ChatInputCommandInteraction,
-  EmbedBuilder,
+  GuildMember,
   PermissionsBitField,
-  SlashCommandBuilder,
-  TextChannel
+  SlashCommandBuilder
 } from "discord.js";
-import { bot } from "../index";
-import { MusicQueue } from "../structs/MusicQueue";
-import { Playlist } from "../structs/Playlist";
-import { Song } from "../structs/Song";
+import { lavalink, lavalinkHandler } from "../index";
 import { i18n } from "../utils/i18n";
 
 export default {
@@ -20,83 +15,88 @@ export default {
   cooldown: 5,
   permissions: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.Speak],
   async execute(interaction: ChatInputCommandInteraction, queryOptionName = "playlist") {
-    let argSongName = interaction.options.getString(queryOptionName);
+    let argPlaylist = interaction.options.getString(queryOptionName);
 
-    const guildMemer = interaction.guild!.members.cache.get(interaction.user.id);
-    const { channel } = guildMemer!.voice;
+    const member = interaction.member as GuildMember;
+    const voiceChannel = member.voice.channel;
 
-    const queue = bot.queues.get(interaction.guild!.id);
+    let player = lavalink.getPlayer(interaction.guildId!);
 
-    if (!channel)
+    if (!voiceChannel) {
       return interaction.reply({ content: i18n.__("playlist.errorNotChannel"), ephemeral: true }).catch(console.error);
+    }
 
-    if (queue && channel.id !== queue.connection.joinConfig.channelId)
-      if (interaction.replied)
+    if (player && voiceChannel.id !== player.voiceChannelId) {
+      if (interaction.replied) {
         return interaction
           .editReply({ content: i18n.__mf("play.errorNotInSameChannel", { user: interaction.client.user!.username }) })
           .catch(console.error);
-      else
+      } else {
         return interaction
           .reply({
             content: i18n.__mf("play.errorNotInSameChannel", { user: interaction.client.user!.username }),
             ephemeral: true
           })
           .catch(console.error);
-
-    let playlist;
+      }
+    }
 
     try {
-      playlist = await Playlist.from(argSongName!.split(" ")[0], argSongName!);
+      // Create player if it doesn't exist
+      if (!player) {
+        player = await lavalinkHandler.createPlayer({
+          guildId: interaction.guildId!,
+          voiceChannelId: voiceChannel.id,
+          textChannelId: interaction.channelId
+        });
+      }
+
+      // Connect if not connected
+      if (!player.connected) {
+        await player.connect();
+      }
+
+      // Search for playlist
+      const result = await player.search(argPlaylist!, interaction.user);
+
+      if (!result.tracks.length) {
+        if (interaction.replied) {
+          return interaction.editReply({ content: i18n.__("playlist.errorNotFoundPlaylist") }).catch(console.error);
+        } else {
+          return interaction
+            .reply({ content: i18n.__("playlist.errorNotFoundPlaylist"), ephemeral: true })
+            .catch(console.error);
+        }
+      }
+
+      // Add all tracks to queue
+      await player.queue.add(result.tracks);
+
+      // Start playing if not already
+      if (!player.playing && !player.paused) {
+        await player.play();
+      }
+
+      const playlistName = result.playlist?.name || "Playlist";
+      const message =
+        i18n.__mf("playlist.startedPlaylist", { author: interaction.user.id }) +
+        `\n**${playlistName}** - ${result.tracks.length} songs`;
+
+      if (interaction.replied) {
+        await interaction.editReply({ content: message }).catch(console.error);
+      } else {
+        await interaction.reply({ content: message }).catch(console.error);
+      }
     } catch (error) {
       console.error(error);
 
-      if (interaction.replied)
+      if (interaction.replied) {
         return interaction.editReply({ content: i18n.__("playlist.errorNotFoundPlaylist") }).catch(console.error);
-      else
+      } else {
         return interaction
           .reply({ content: i18n.__("playlist.errorNotFoundPlaylist"), ephemeral: true })
           .catch(console.error);
+      }
     }
-
-    if (queue) {
-      queue.songs.push(...playlist.videos);
-    } else {
-      const newQueue = new MusicQueue({
-        interaction,
-        textChannel: interaction.channel! as TextChannel,
-        connection: joinVoiceChannel({
-          channelId: channel.id,
-          guildId: channel.guild.id,
-          adapterCreator: channel.guild.voiceAdapterCreator as DiscordGatewayAdapterCreator
-        })
-      });
-
-      bot.queues.set(interaction.guild!.id, newQueue);
-      newQueue.enqueue(...playlist.videos);
-    }
-
-    let playlistEmbed = new EmbedBuilder()
-      .setTitle(`${playlist.data.title}`)
-      .setDescription(
-        playlist.videos
-          .map((song: Song, index: number) => `${index + 1}. ${song.title}`)
-          .join("\n")
-          .slice(0, 4095)
-      )
-      .setURL(playlist.data.url!)
-      .setColor("#F8AA2A")
-      .setTimestamp();
-
-    if (interaction.replied)
-      return interaction.editReply({
-        content: i18n.__mf("playlist.startedPlaylist", { author: interaction.user.id }),
-        embeds: [playlistEmbed]
-      });
-    interaction
-      .reply({
-        content: i18n.__mf("playlist.startedPlaylist", { author: interaction.user.id }),
-        embeds: [playlistEmbed]
-      })
-      .catch(console.error);
   }
 };

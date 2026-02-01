@@ -16,7 +16,6 @@ import { checkPermissions, PermissionResult } from "../utils/checkPermissions";
 import { config } from "../utils/config";
 import { i18n } from "../utils/i18n";
 import { MissingPermissionsException } from "../utils/MissingPermissionsException";
-import { MusicQueue } from "./MusicQueue";
 
 export class Bot {
   public readonly prefix = "/";
@@ -24,7 +23,6 @@ export class Bot {
   public slashCommands = new Array<ApplicationCommandDataResolvable>();
   public slashCommandsMap = new Collection<string, Command>();
   public cooldowns = new Collection<string, Collection<Snowflake, number>>();
-  public queues = new Collection<Snowflake, MusicQueue>();
 
   public constructor(public readonly client: Client) {
     this.client.login(config.TOKEN);
@@ -96,17 +94,21 @@ export class Bot {
         const permissionsCheck: PermissionResult = await checkPermissions(command, interaction);
 
         if (permissionsCheck.result) {
-          command.execute(interaction as ChatInputCommandInteraction);
+          await command.execute(interaction as ChatInputCommandInteraction);
         } else {
           throw new MissingPermissionsException(permissionsCheck.missing);
         }
       } catch (error: any) {
         console.error(error);
 
-        if (error.message.includes("permissions")) {
-          interaction.reply({ content: error.toString(), ephemeral: true }).catch(console.error);
-        } else {
-          interaction.reply({ content: i18n.__("common.errorCommand"), ephemeral: true }).catch(console.error);
+        const errorMessage = error.message?.includes("permissions")
+          ? error.toString()
+          : i18n.__("common.errorCommand");
+
+        if (interaction.deferred) {
+          interaction.editReply({ content: errorMessage }).catch(console.error);
+        } else if (!interaction.replied) {
+          interaction.reply({ content: errorMessage, ephemeral: true }).catch(console.error);
         }
       }
     });

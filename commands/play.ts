@@ -1,10 +1,32 @@
-import { DiscordGatewayAdapterCreator, joinVoiceChannel } from "@discordjs/voice";
-import { ChatInputCommandInteraction, PermissionsBitField, SlashCommandBuilder, TextChannel } from "discord.js";
-import { bot } from "../index";
-import { MusicQueue } from "../structs/MusicQueue";
-import { Song } from "../structs/Song";
+import {
+  ChatInputCommandInteraction,
+  GuildMember,
+  PermissionsBitField,
+  SlashCommandBuilder,
+  TextChannel
+} from "discord.js";
+import { lavalink, lavalinkHandler } from "../index";
 import { i18n } from "../utils/i18n";
 import { playlistPattern } from "../utils/patterns";
+import { bot } from "../index";
+
+// Helper function to safely reply to interaction
+async function safeEditReply(interaction: ChatInputCommandInteraction, content: string) {
+  try {
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply({ content });
+    } else {
+      await interaction.reply({ content });
+    }
+  } catch (error) {
+    // If all else fails, try followUp or send to channel
+    try {
+      await interaction.followUp({ content, ephemeral: true });
+    } catch {
+      (interaction.channel as TextChannel)?.send(content).catch(() => {});
+    }
+  }
+}
 
 export default {
   data: new SlashCommandBuilder()
@@ -13,86 +35,113 @@ export default {
     .addStringOption((option) => option.setName("song").setDescription("The song you want to play").setRequired(true)),
   cooldown: 3,
   permissions: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.Speak],
-  async execute(interaction: ChatInputCommandInteraction, input: string) {
+  async execute(interaction: ChatInputCommandInteraction, input?: string) {
     let argSongName = interaction.options.getString("song");
-    if (!argSongName) argSongName = input;
+    if (!argSongName) argSongName = input || "";
 
-    const guildMember = interaction.guild!.members.cache.get(interaction.user.id);
-    const { channel } = guildMember!.voice;
+    const member = interaction.member as GuildMember;
+    const voiceChannel = member.voice.channel;
 
-    if (!channel)
-      return interaction.reply({ content: i18n.__("play.errorNotChannel"), ephemeral: true }).catch(console.error);
-
-    const queue = bot.queues.get(interaction.guild!.id);
-
-    if (queue && channel.id !== queue.connection.joinConfig.channelId)
-      return interaction
-        .reply({
-          content: i18n.__mf("play.errorNotInSameChannel", { user: bot.client.user!.username }),
-          ephemeral: true
-        })
-        .catch(console.error);
-
-    if (!argSongName)
-      return interaction
-        .reply({ content: i18n.__mf("play.usageReply", { prefix: bot.prefix }), ephemeral: true })
-        .catch(console.error);
-
-    const url = argSongName;
-
-    if (interaction.replied) await interaction.editReply("⏳ Loading...").catch(console.error);
-    else await interaction.reply("⏳ Loading...");
-
-    // Start the playlist if playlist url was provided
-    if (playlistPattern.test(url)) {
-      await interaction.editReply("🔗 Link is playlist").catch(console.error);
-
-      return bot.slashCommandsMap.get("playlist")!.execute(interaction, "song");
+    if (!voiceChannel) {
+      return safeEditReply(interaction, i18n.__("play.errorNotChannel"));
     }
 
-    let song;
+    let player = lavalink.getPlayer(interaction.guildId!);
+
+    if (player && voiceChannel.id !== player.voiceChannelId) {
+      return safeEditReply(
+        interaction,
+        i18n.__mf("play.errorNotInSameChannel", { user: interaction.client.user!.username })
+      );
+    }
+
+    if (!argSongName) {
+      return safeEditReply(interaction, i18n.__mf("play.usageReply", { prefix: bot.prefix }));
+    }
+
+    let query = argSongName;
+
+    // Handle playlist URLs - show loading message
+    if (playlistPattern.test(query)) {
+      await safeEditReply(interaction, "🔗 Loading playlist...");
+    }
 
     try {
-      song = await Song.from(url, url);
+      // Create player if it doesn't exist
+      if (!player) {
+        player = await lavalinkHandler.createPlayer({
+          guildId: interaction.guildId!,
+          voiceChannelId: voiceChannel.id,
+          textChannelId: interaction.channelId
+        });
+      }
+
+      // Connect to voice channel if not connected
+      if (!player.connected) {
+        await player.connect();
+      }
+
+      // Search for the track
+      console.log(`[Play] Searching for: ${query}`);
+      const result = await player.search(query, interaction.user);
+      console.log(`[Play] Search result:`, {
+        loadType: result.loadType,
+        tracksCount: result.tracks?.length || 0,
+        error: result.exception?.message || null
+      });
+
+      if (!result.tracks.length) {
+        console.log(`[Play] No tracks found for: ${query}`);
+        return safeEditReply(interaction, i18n.__mf("play.errorNoResults", { url: `<${argSongName}>` }));
+      }
+
+      if (result.loadType === "playlist" && result.playlist) {
+        // Add all tracks from playlist
+        await player.queue.add(result.tracks);
+        console.log(`[Play] Added ${result.tracks.length} tracks from playlist`);
+        await safeEditReply(
+          interaction,
+          i18n.__mf("playlist.startedPlaylist", { author: interaction.user.id }) +
+            `\n**${result.playlist.name}** - ${result.tracks.length} songs`
+        );
+      } else {
+        // Add single track
+        const track = result.tracks[0];
+        console.log(`[Play] Adding track: ${track.info.title}`);
+        await player.queue.add(track);
+        console.log(`[Play] Track added. Queue size: ${player.queue.tracks.length}, Playing: ${player.playing}`);
+
+        // If already playing, show "added to queue" message
+        if (player.playing) {
+          await safeEditReply(
+            interaction,
+            i18n.__mf("play.queueAdded", { title: track.info.title, author: interaction.user.id })
+          );
+        } else {
+          // Show a brief loading message that will be followed by the "now playing" message
+          await safeEditReply(interaction, "🎵 Loading...");
+        }
+      }
+
+      // Start playing if not already
+      if (!player.playing && !player.paused) {
+        console.log(`[Play] Starting playback...`);
+        await player.play();
+        console.log(`[Play] Playback started. Playing: ${player.playing}`);
+      } else {
+        console.log(`[Play] Already playing or paused, not starting new playback`);
+      }
     } catch (error: any) {
-      console.error(error);
+      console.error("Play command error:", error.message || error);
+      console.error("Full error:", JSON.stringify(error, null, 2));
 
-      if (error.name == "NoResults")
-        return interaction
-          .reply({ content: i18n.__mf("play.errorNoResults", { url: `<${url}>` }), ephemeral: true })
-          .catch(console.error);
+      const errorMessage = error.message?.includes("No result") || error.message?.includes("No matches")
+        ? i18n.__mf("play.errorNoResults", { url: `<${argSongName}>` })
+        : error.message?.includes("not a valid")
+          ? i18n.__mf("play.errorInvalidURL", { url: `<${argSongName}>` })
+          : i18n.__("common.errorCommand");
 
-      if (error.name == "InvalidURL")
-        return interaction
-          .reply({ content: i18n.__mf("play.errorInvalidURL", { url: `<${url}>` }), ephemeral: true })
-          .catch(console.error);
-
-      if (interaction.replied)
-        return await interaction.editReply({ content: i18n.__("common.errorCommand") }).catch(console.error);
-      else return interaction.reply({ content: i18n.__("common.errorCommand"), ephemeral: true }).catch(console.error);
+      await safeEditReply(interaction, errorMessage);
     }
-
-    if (queue) {
-      queue.enqueue(song);
-
-      return (interaction.channel as TextChannel)
-        .send({ content: i18n.__mf("play.queueAdded", { title: song.title, author: interaction.user.id }) })
-        .catch(console.error);
-    }
-
-    const newQueue = new MusicQueue({
-      interaction,
-      textChannel: interaction.channel! as TextChannel,
-      connection: joinVoiceChannel({
-        channelId: channel.id,
-        guildId: channel.guild.id,
-        adapterCreator: channel.guild.voiceAdapterCreator as DiscordGatewayAdapterCreator
-      })
-    });
-
-    bot.queues.set(interaction.guild!.id, newQueue);
-
-    newQueue.enqueue(song);
-    interaction.deleteReply().catch(console.error);
   }
 };

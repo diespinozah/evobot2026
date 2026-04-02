@@ -22,7 +22,7 @@
   "dependencies": {
     "array-move": "^3.0.1",
     "discord.js": "^14.15.3",
-    "dotenv": "^16.4.5",
+    "dotenv": "^17.4.0",
     "genius-lyrics": "^4.4.7",
     "i18n": "^0.15.1",
     "lavalink-client": "^2.3.1",
